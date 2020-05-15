@@ -499,7 +499,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
         )
 
         if quiet:
-            return results
+            return list(results)
         return _AT_SEARCH_RESULT(
             results,
             self,
@@ -1055,7 +1055,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
         # See if we need to kick the account off.
 
         for session in self.sessions.all():
-            session.msg(_("Your character %s has been destroyed.") % self.key)
+            session.msg(_("Your character {key} has been destroyed.").format(key=self.key))
             # no need to disconnect, Account just jumps to OOC mode.
         # sever the connection (important!)
         if self.account:
@@ -2066,9 +2066,6 @@ class DefaultCharacter(DefaultObject):
         # Set the supplied key as the name of the intended object
         kwargs["key"] = key
 
-        # Get home for character
-        kwargs["home"] = ObjectDB.objects.get_id(kwargs.get("home", settings.DEFAULT_HOME))
-
         # Get permissions
         kwargs["permissions"] = kwargs.get("permissions", settings.PERMISSION_ACCOUNT_DEFAULT)
 
@@ -2529,10 +2526,10 @@ class DefaultExit(DefaultObject):
                 [
                     "puppet:false()",  # would be weird to puppet an exit ...
                     "traverse:all()",  # who can pass through exit by default
-                    "get:false()",
+                    "get:false()",  # noone can pick up the exit
                 ]
             )
-        )  # noone can pick up the exit
+        )
 
         # an exit should have a destination (this is replaced at creation time)
         if self.location:
