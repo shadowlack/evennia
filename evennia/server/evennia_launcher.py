@@ -2262,7 +2262,7 @@ def main():
         if option in ("makemessages", "compilemessages"):
             # some commands don't require the presence of a game directory to work
             need_gamedir = False
-        if option in ("shell", "check", "makemigrations"):
+        if option in ("shell", "check", "makemigrations", "createsuperuser"):
             # some django commands requires the database to exist,
             # or evennia._init to have run before they work right.
             check_db = True
@@ -2282,7 +2282,7 @@ def main():
         # but keep 'evennia' as the name instead of django-admin. This is
         # an exit condition.
         sys.argv[0] = re.sub(r"(-script\.pyw?|\.exe)?$", "", sys.argv[0])
-        sys.exit(execute_from_command_line())
+        sys.exit(execute_from_command_line(sys.argv))
 
     elif not args.tail_log:
         # no input; print evennia info (don't pring if we're tailing log)
