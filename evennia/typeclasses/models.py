@@ -104,10 +104,27 @@ class TypeclassBase(SharedMemoryModelBase):
         attrs["typename"] = name
         attrs["path"] = "%s.%s" % (attrs["__module__"], name)
 
-        # typeclass proxy setup
-        if "Meta" not in attrs:
+        def _get_dbmodel(bases):
+            """Recursively get the dbmodel"""
+            if not hasattr(bases, "__iter__"):
+                bases = [bases]
+            for base in bases:
+                if base._meta.proxy or base._meta.abstract:
+                    for kls in base._meta.parents:
+                        return _get_dbmodel(kls)
+                return base
 
-            class Meta(object):
+        dbmodel = _get_dbmodel(bases)
+
+        # typeclass proxy setup
+        # first check explicit __applabel__ on the typeclass, then figure
+        # it out from the dbmodel
+        if dbmodel and "__applabel__" not in attrs:
+            # find the app-label in one of the bases, usually the dbmodel
+            attrs["__applabel__"] = dbmodel._meta.app_label
+
+        if "Meta" not in attrs:
+            class Meta:
                 proxy = True
                 app_label = attrs.get("__applabel__", "typeclasses")
 
@@ -116,9 +133,20 @@ class TypeclassBase(SharedMemoryModelBase):
 
         new_class = ModelBase.__new__(cls, name, bases, attrs)
 
+        # django doesn't support inheriting proxy models so we hack support for
+        # it here by injecting `proxy_for_model` to the actual dbmodel.
+        # Unfortunately we cannot also set the correct model_name, because this
+        # would block multiple-inheritance of typeclasses (Django doesn't allow
+        # multiple bases of the same model).
+        if dbmodel:
+            new_class._meta.proxy_for_model = dbmodel
+            # Maybe Django will eventually handle this in the future:
+            # new_class._meta.model_name = dbmodel._meta.model_name
+
         # attach signals
         signals.post_save.connect(call_at_first_save, sender=new_class)
-        signals.pre_delete.connect(remove_attributes_on_delete, sender=new_class)
+        signals.pre_delete.connect(
+            remove_attributes_on_delete, sender=new_class)
         return new_class
 
 
