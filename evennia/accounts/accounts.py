@@ -22,7 +22,6 @@ from evennia.accounts.manager import AccountManager
 from evennia.accounts.models import AccountDB
 from evennia.objects.models import ObjectDB
 from evennia.comms.models import ChannelDB
-from evennia.commands import cmdhandler
 from evennia.server.models import ServerConfig
 from evennia.server.throttle import Throttle
 from evennia.utils import class_from_module, create, logger
@@ -49,6 +48,7 @@ _MULTISESSION_MODE = settings.MULTISESSION_MODE
 _MAX_NR_CHARACTERS = settings.MAX_NR_CHARACTERS
 _CMDSET_ACCOUNT = settings.CMDSET_ACCOUNT
 _MUDINFO_CHANNEL = None
+_CMDHANDLER = None
 
 # Create throttles for too many account-creations and login attempts
 CREATION_THROTTLE = Throttle(
@@ -184,7 +184,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
      - at_server_reload()
      - at_server_shutdown()
 
-     """
+    """
 
     objects = AccountManager()
 
@@ -373,7 +373,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
             puppet (Object): The matching puppeted object, if any.
 
         """
-        return session.puppet
+        return session.puppet if session else None
 
     def get_all_puppets(self):
         """
@@ -410,7 +410,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
         """
         Checks if a given username or IP is banned.
 
-        Kwargs:
+        Keyword Args:
             ip (str, optional): IP address.
             username (str, optional): Username.
 
@@ -481,7 +481,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
             password (str): Password of account
             ip (str, optional): IP address of client
 
-        Kwargs:
+        Keyword Args:
             session (Session, optional): Session requesting authentication
 
         Returns:
@@ -611,7 +611,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
         Args:
             password (str): Password to validate
 
-        Kwargs:
+        Keyword Args:
             account (DefaultAccount, optional): Account object to validate the
                 password for. Optional, but Django includes some validators to
                 do things like making sure users aren't setting passwords to the
@@ -680,6 +680,9 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
         )
         Character = class_from_module(character_typeclass)
 
+        if "location" not in kwargs:
+            kwargs["location"] = ObjectDB.objects.get_id(settings.START_LOCATION)
+
         # Create the character
         character, errs = Character.create(
             character_key,
@@ -705,7 +708,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
         with default (or overridden) permissions and having joined them to the
         appropriate default channels.
 
-        Kwargs:
+        Keyword Args:
             username (str): Username of Account owner
             password (str): Password of Account owner
             email (str, optional): Email address of Account owner
@@ -872,7 +875,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
                 default send behavior for the current
                 MULTISESSION_MODE.
             options (list): Protocol-specific options. Passed on to the protocol.
-        Kwargs:
+        Keyword Args:
             any (dict): All other keywords are passed on to the protocol.
 
         """
@@ -920,7 +923,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
             session (Session, optional): The session to be responsible
                 for the command-send
 
-        Kwargs:
+        Keyword Args:
             kwargs (any): Other keyword arguments will be added to the
                 found command object instance as variables before it
                 executes. This is unused by default Evennia but may be
@@ -928,6 +931,10 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
                 commands at run-time.
 
         """
+        # break circular import issues
+        global _CMDHANDLER
+        if not _CMDHANDLER:
+            from evennia.commands.cmdhandler import cmdhandler as _CMDHANDLER
         raw_string = self.nicks.nickreplace(
             raw_string, categories=("inputline", "channel"), include_account=False
         )
@@ -936,7 +943,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
             sessions = self.sessions.get()
             session = sessions[0] if sessions else None
 
-        return cmdhandler.cmdhandler(
+        return _CMDHANDLER(
             self, raw_string, callertype="account", session=session, **kwargs
         )
 
@@ -1036,7 +1043,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
           no_superuser_bypass (bool, optional): Turn off superuser
             lock bypassing. Be careful with this one.
 
-        Kwargs:
+        Keyword Args:
           kwargs (any): Passed to the at_access hook along with the result.
 
         Returns:
@@ -1180,7 +1187,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
                 check.
             access_type (str): The type of access checked.
 
-        Kwargs:
+        Keyword Args:
             kwargs (any): These are passed on from the access check
                 and can be used to relay custom instructions from the
                 check mechanism.
@@ -1262,7 +1269,10 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
                 ]
             except Exception:
                 logger.log_trace()
-        now = timezone.localtime()
+        if settings.USE_TZ:
+            now = timezone.localtime()
+        else:
+            now = timezone.now()
         now = "%02i-%02i-%02i(%02i:%02i)" % (now.year, now.month, now.day, now.hour, now.minute)
         if _MUDINFO_CHANNEL:
             _MUDINFO_CHANNEL.tempmsg(f"[{_MUDINFO_CHANNEL.key}, {now}]: {message}")
@@ -1382,7 +1392,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
             text (str, optional): The message received.
             from_obj (any, optional): The object sending the message.
 
-        Kwargs:
+        Keyword Args:
             This includes any keywords sent to the `msg` method.
 
         Returns:
@@ -1404,7 +1414,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
             text (str, optional): Text to send.
             to_obj (any, optional): The object to send to.
 
-        Kwargs:
+        Keyword Args:
             Keywords passed from msg()
 
         Notes:
@@ -1490,7 +1500,7 @@ class DefaultAccount(AccountDB, metaclass=TypeclassBase):
                     )
                 )
             result.append("\n\n |whelp|n - more commands")
-            result.append("\n |wooc <Text>|n - talk on public channel")
+            result.append("\n |wpublic <Text>|n - talk on public channel")
 
             charmax = _MAX_NR_CHARACTERS
 
@@ -1563,7 +1573,7 @@ class DefaultGuest(DefaultAccount):
         """
         Gets or creates a Guest account object.
 
-        Kwargs:
+        Keyword Args:
             ip (str, optional): IP address of requestor; used for ban checking,
                 throttling and logging
 

@@ -174,6 +174,27 @@ def _msg_err(receiver, stringtuple):
         )
 
 
+def _process_input(caller, prompt, result, cmd, generator):
+    """
+    Specifically handle the get_input value to send to _progressive_cmd_run as
+    part of yielding from a Command's `func`.
+
+    Args:
+        caller (Character, Account or Session): the caller.
+        prompt (str): The sent prompt.
+        result (str): The unprocessed answer.
+        cmd (Command): The command itself.
+        generator (GeneratorType): The generator.
+
+    Returns:
+        result (bool): Always `False` (stop processing).
+
+    """
+    # We call it using a Twisted deferLater to make sure the input is properly closed.
+    deferLater(reactor, 0, _progressive_cmd_run, cmd, generator, response=result)
+    return False
+
+
 def _progressive_cmd_run(cmd, generator, response=None):
     """
     Progressively call the command that was given in argument. Used
@@ -206,7 +227,15 @@ def _progressive_cmd_run(cmd, generator, response=None):
         else:
             value = generator.send(response)
     except StopIteration:
-        raise
+        # duplicated from cmdhandler._run_command, to have these
+        # run in the right order while staying inside the deferred
+        cmd.at_post_cmd()
+        if cmd.save_for_next:
+            # store a reference to this command, possibly
+            # accessible by the next command.
+            cmd.caller.ndb.last_cmd = copy(cmd)
+        else:
+            cmd.caller.ndb.last_cmd = None
     else:
         if isinstance(value, (int, float)):
             utils.delay(value, _progressive_cmd_run, cmd, generator)
@@ -214,27 +243,6 @@ def _progressive_cmd_run(cmd, generator, response=None):
             _GET_INPUT(cmd.caller, value, _process_input, cmd=cmd, generator=generator)
         else:
             raise ValueError("unknown type for a yielded value in command: {}".format(type(value)))
-
-
-def _process_input(caller, prompt, result, cmd, generator):
-    """
-    Specifically handle the get_input value to send to _progressive_cmd_run as
-    part of yielding from a Command's `func`.
-
-    Args:
-        caller (Character, Account or Session): the caller.
-        prompt (str): The sent prompt.
-        result (str): The unprocessed answer.
-        cmd (Command): The command itself.
-        generator (GeneratorType): The generator.
-
-    Returns:
-        result (bool): Always `False` (stop processing).
-
-    """
-    # We call it using a Twisted deferLater to make sure the input is properly closed.
-    deferLater(reactor, 0, _progressive_cmd_run, cmd, generator, response=result)
-    return False
 
 
 # custom Exceptions
@@ -486,6 +494,11 @@ def get_and_merge_cmdsets(caller, session, account, obj, callertype, raw_string)
             cmdset = None
         for cset in (cset for cset in local_obj_cmdsets if cset):
             cset.duplicates = cset.old_duplicates
+        # important - this syncs the CmdSetHandler's .current field with the
+        # true current cmdset!
+        if cmdset:
+            caller.cmdset.current = cmdset
+
         returnValue(cmdset)
     except ErrorReported:
         raise
@@ -540,7 +553,7 @@ def cmdhandler(
             is made available as `self.cmdstring` when the Command runs.
             If not given, the command will be assumed to be called as `cmdobj.key`.
 
-    Kwargs:
+    Keyword Args:
         kwargs (any): other keyword arguments will be assigned as named variables on the
             retrieved command object *before* it is executed. This is unused
             in default Evennia but may be used by code to set custom flags or
@@ -593,7 +606,7 @@ def cmdhandler(
             cmd.raw_string = unformatted_raw_string
             # cmd.obj  # set via on-object cmdset handler for each command,
             # since this may be different for every command when
-            # merging multuple cmdsets
+            # merging multiple cmdsets
 
             if hasattr(cmd, "obj") and hasattr(cmd.obj, "scripts"):
                 # cmd.obj is automatically made available by the cmdhandler.
@@ -631,22 +644,15 @@ def cmdhandler(
             ret = cmd.func()
             if isinstance(ret, types.GeneratorType):
                 # cmd.func() is a generator, execute progressively
-                in_generator = True
-                try:
-                    _progressive_cmd_run(cmd, ret)
-                except StopIteration:
-                    # this means func() has run its course
-                    in_generator = False
-                yield None
-            else:
-                in_generator = False
+                _progressive_cmd_run(cmd, ret)
                 ret = yield ret
-
-            if not in_generator:
-                # this will only run if we are out of the generator for this
-                # cmd, otherwise we would have at_post_cmd run before a delayed
-                # func() finished
-
+                # note that the _progressive_cmd_run will itself run
+                # the at_post_cmd etc as it finishes; this is a bit of
+                # code duplication but there seems to be no way to
+                # catch the StopIteration here (it's not in the same
+                # frame since this is in a deferred chain)
+            else:
+                ret = yield ret
                 # post-command hook
                 yield cmd.at_post_cmd()
 

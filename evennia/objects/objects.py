@@ -18,12 +18,12 @@ from evennia.objects.models import ObjectDB
 from evennia.scripts.scripthandler import ScriptHandler
 from evennia.commands import cmdset, command
 from evennia.commands.cmdsethandler import CmdSetHandler
-from evennia.commands import cmdhandler
 from evennia.utils import create
 from evennia.utils import search
 from evennia.utils import logger
 from evennia.utils import ansi
 from evennia.utils.utils import (
+    class_from_module,
     variable_from_module,
     lazy_property,
     make_iter,
@@ -38,8 +38,10 @@ _MULTISESSION_MODE = settings.MULTISESSION_MODE
 
 _ScriptDB = None
 _SESSIONS = None
+_CMDHANDLER = None
 
 _AT_SEARCH_RESULT = variable_from_module(*settings.SEARCH_AT_RESULT.rsplit(".", 1))
+_COMMAND_DEFAULT_CLASS = class_from_module(settings.COMMAND_DEFAULT_CLASS)
 # the sessid_max is based on the length of the db_sessid csv field (excluding commas)
 _SESSID_MAX = 16 if _MULTISESSION_MODE in (1, 3) else 1
 
@@ -333,7 +335,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
         Args:
             count (int): Number of objects of this type
             looker (Object): Onlooker. Not used by default.
-        Kwargs:
+        Keyword Args:
             key (str): Optional key to pluralize, if given, use this instead of the object's key.
         Returns:
             singular (str): The singular form to display.
@@ -389,7 +391,8 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
                    a global search.
                 - `me,self`: self-reference to this object
                 - `<num>-<string>` - can be used to differentiate
-                   between multiple same-named matches
+                   between multiple same-named matches. The exact form of this input
+                   is given by `settings.SEARCH_MULTIMATCH_REGEX`.
             global_search (bool): Search all objects globally. This overrules 'location' data.
             use_nicks (bool): Use nickname-replace (nicktype "object") on `searchdata`.
             typeclass (str or Typeclass, or list of either): Limit search only
@@ -555,7 +558,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             session (Session, optional): Session to
                 return results to
 
-        Kwargs:
+        Keyword Args:
             Other keyword arguments will be added to the found command
             object instace as variables before it executes.  This is
             unused by default Evennia but may be used to set flags and
@@ -573,12 +576,17 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
                 command structure.
 
         """
+        # break circular import issues
+        global _CMDHANDLER
+        if not _CMDHANDLER:
+            from evennia.commands.cmdhandler import cmdhandler as _CMDHANDLER
+
         # nick replacement - we require full-word matching.
         # do text encoding conversion
         raw_string = self.nicks.nickreplace(
             raw_string, categories=("inputline", "channel"), include_account=True
         )
-        return cmdhandler.cmdhandler(
+        return _CMDHANDLER(
             self, raw_string, callertype="object", session=session, **kwargs
         )
 
@@ -601,7 +609,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
                 depends on the MULTISESSION_MODE.
             options (dict, optional): Message-specific option-value
                 pairs. These will be applied at the protocol level.
-        Kwargs:
+        Keyword Args:
             any (string or tuples): All kwarg keys not listed above
                 will be treated as send-command names and their arguments
                 (which can be a string or a tuple).
@@ -620,7 +628,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
                     logger.log_trace()
         kwargs["options"] = options
         try:
-            if not self.at_msg_receive(text=text, **kwargs):
+            if not self.at_msg_receive(text=text, from_obj=from_obj, **kwargs):
                 # if at_msg_receive returns false, we abort message to this object
                 return
         except Exception:
@@ -652,7 +660,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             exclude (list, optional): A list of object not to call the
                 function on.
 
-        Kwargs:
+        Keyword Args:
             Keyword arguments will be passed to the function for all objects.
         """
         contents = self.contents
@@ -684,7 +692,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
                 for every looker in contents that receives the
                 message. This allows for every object to potentially
                 get its own customized string.
-        Kwargs:
+        Keyword Args:
             Keyword arguments will be passed on to `obj.msg()` for all
             messaged objects.
 
@@ -759,7 +767,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
                 (at_before/after_move etc) with quiet=True, this is as quiet a move
                 as can be done.
 
-        Kwargs:
+        Keyword Args:
           Passed on to announce_move_to and announce_move_from hooks.
 
         Returns:
@@ -933,7 +941,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             key (str): Name of the new object.
             account (Account): Account to attribute this object to.
 
-        Kwargs:
+        Keyword Args:
             description (str): Brief description for this object.
             ip (str): IP address of creator (for object auditing).
 
@@ -1099,7 +1107,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
           no_superuser_bypass (bool, optional): If `True`, don't skip
             lock check for superuser (be careful with this one).
 
-        Kwargs:
+        Keyword Args:
           Passed on to the at_access hook along with the result of the access check.
 
         """
@@ -1258,7 +1266,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
         place to do it. This is called also if the object currently
         have no cmdsets.
 
-        Kwargs:
+        Keyword Args:
             caller (Session, Object or Account): The caller requesting
                 this cmdset.
 
@@ -1360,7 +1368,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             accessing_obj (Object or Account): The entity trying to gain access.
             access_type (str): The type of access that was requested.
 
-        Kwargs:
+        Keyword Args:
             Not used by default, added for possible expandability in a
             game.
 
@@ -1435,7 +1443,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             }
         )
 
-        location.msg_contents(string, exclude=(self,), mapping=mapping)
+        location.msg_contents(string, exclude=(self,), from_obj=self, mapping=mapping)
 
     def announce_move_to(self, source_location, msg=None, mapping=None, **kwargs):
         """
@@ -1497,7 +1505,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             }
         )
 
-        destination.msg_contents(string, exclude=(self,), mapping=mapping)
+        destination.msg_contents(string, exclude=(self,), from_obj=self, mapping=mapping)
 
     def at_after_move(self, source_location, **kwargs):
         """
@@ -1611,7 +1619,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             text (str, optional): The message received.
             from_obj (any, optional): The object sending the message.
 
-        Kwargs:
+        Keyword Args:
             This includes any keywords sent to the `msg` method.
 
         Returns:
@@ -1633,7 +1641,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             text (str, optional): Text to send.
             to_obj (any, optional): The object to send to.
 
-        Kwargs:
+        Keyword Args:
             Keywords passed from msg()
 
         Notes:
@@ -1869,7 +1877,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
 
         Args:
             message (str): The suggested say/whisper text spoken by self.
-        Kwargs:
+        Keyword Args:
             whisper (bool): If True, this is a whisper rather than
                 a say. This is sent by the whisper command by default.
                 Other verbal commands could use this hook in similar
@@ -1909,7 +1917,7 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
                 (by default only used by whispers).
             msg_receivers(str): Specific message to pass to the receiver(s). This will parsed
                 with the {receiver} placeholder replaced with the given receiver.
-        Kwargs:
+        Keyword Args:
             whisper (bool): If this is a whisper rather than a say. Kwargs
                 can be used by other verbal commands in a similar way.
             mapping (dict): Pass an additional mapping to the message.
@@ -1940,12 +1948,14 @@ class DefaultObject(ObjectDB, metaclass=TypeclassBase):
             # whisper mode
             msg_type = "whisper"
             msg_self = (
-                '{self} whisper to {all_receivers}, "{speech}"' if msg_self is True else msg_self
+                '{self} whisper to {all_receivers}, "|n{speech}|n"'
+                if msg_self is True
+                else msg_self
             )
-            msg_receivers = msg_receivers or '{object} whispers: "{speech}"'
+            msg_receivers = msg_receivers or '{object} whispers: "|n{speech}|n"'
             msg_location = None
         else:
-            msg_self = '{self} say, "{speech}"' if msg_self is True else msg_self
+            msg_self = '{self} say, "|n{speech}|n"' if msg_self is True else msg_self
             msg_location = msg_location or '{object} says, "{speech}"'
             msg_receivers = msg_receivers or message
 
@@ -2048,7 +2058,7 @@ class DefaultCharacter(DefaultObject):
                 If unset supplying None-- it will
                 change the default lockset and skip creator attribution.
 
-        Kwargs:
+        Keyword Args:
             description (str): Brief description for this object.
             ip (str): IP address of creator (for object auditing).
             All other kwargs will be passed into the create_object call.
@@ -2265,7 +2275,7 @@ class DefaultRoom(DefaultObject):
                 given, it will be given specific control/edit permissions to this
                 object (along with normal Admin perms). If not given, default
 
-        Kwargs:
+        Keyword Args:
             description (str): Brief description for this object.
             ip (str): IP address of creator (for object auditing).
 
@@ -2341,8 +2351,7 @@ class DefaultRoom(DefaultObject):
 # Default Exit command, used by the base exit object
 #
 
-
-class ExitCommand(command.Command):
+class ExitCommand(_COMMAND_DEFAULT_CLASS):
     """
     This is a command that simply cause the caller to traverse
     the object it is attached to.
@@ -2468,7 +2477,7 @@ class DefaultExit(DefaultObject):
             source (Room): The room to create this exit in.
             dest (Room): The room to which this exit should go.
 
-        Kwargs:
+        Keyword Args:
             description (str): Brief description for this object.
             ip (str): IP address of creator (for object auditing).
 
@@ -2560,7 +2569,7 @@ class DefaultExit(DefaultObject):
         place to do it. This is called also if the object currently
         has no cmdsets.
 
-        Kwargs:
+        Keyword Args:
           force_init (bool): If `True`, force a re-build of the cmdset
             (for example to update aliases).
 

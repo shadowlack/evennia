@@ -16,6 +16,7 @@ import twisted
 import time
 
 from django.conf import settings
+from django.core.paginator import Paginator
 from evennia.server.sessionhandler import SESSIONS
 from evennia.scripts.models import ScriptDB
 from evennia.objects.models import ObjectDB
@@ -406,59 +407,71 @@ class CmdPy(COMMAND_DEFAULT_CLASS):
         )
 
 
-# helper function. Kept outside so it can be imported and run
-# by other commands.
+class ScriptEvMore(EvMore):
+    """
+    Listing 1000+ Scripts can be very slow and memory-consuming. So
+    we use this custom EvMore child to build en EvTable only for
+    each page of the list.
 
+    """
 
-def format_script_list(scripts):
-    """Takes a list of scripts and formats the output."""
-    if not scripts:
-        return "<No scripts>"
+    def init_pages(self, scripts):
+        """Prepare the script list pagination"""
+        script_pages = Paginator(scripts, max(1, int(self.height / 2)))
+        super().init_pages(script_pages)
 
-    table = EvTable(
-        "|wdbref|n",
-        "|wobj|n",
-        "|wkey|n",
-        "|wintval|n",
-        "|wnext|n",
-        "|wrept|n",
-        "|wdb",
-        "|wtypeclass|n",
-        "|wdesc|n",
-        align="r",
-        border="tablecols",
-    )
+    def page_formatter(self, scripts):
+        """Takes a page of scripts and formats the output
+        into an EvTable."""
 
-    for script in scripts:
+        if not scripts:
+            return "<No scripts>"
 
-        nextrep = script.time_until_next_repeat()
-        if nextrep is None:
-            nextrep = "PAUSED" if script.db._paused_time else "--"
-        else:
-            nextrep = "%ss" % nextrep
-
-        maxrepeat = script.repeats
-        remaining = script.remaining_repeats() or 0
-        if maxrepeat:
-            rept = "%i/%i" % (maxrepeat - remaining, maxrepeat)
-        else:
-            rept = "-/-"
-
-        table.add_row(
-            script.id,
-            f"{script.obj.key}({script.obj.dbref})"
-            if (hasattr(script, "obj") and script.obj)
-            else "<Global>",
-            script.key,
-            script.interval if script.interval > 0 else "--",
-            nextrep,
-            rept,
-            "*" if script.persistent else "-",
-            script.typeclass_path.rsplit(".", 1)[-1],
-            crop(script.desc, width=20),
+        table = EvTable(
+            "|wdbref|n",
+            "|wobj|n",
+            "|wkey|n",
+            "|wintval|n",
+            "|wnext|n",
+            "|wrept|n",
+            "|wdb",
+            "|wtypeclass|n",
+            "|wdesc|n",
+            align="r",
+            border="tablecols",
+            width=self.width,
         )
 
-    return "%s" % table
+        for script in scripts:
+
+            nextrep = script.time_until_next_repeat()
+            if nextrep is None:
+                nextrep = "PAUSED" if script.db._paused_time else "--"
+            else:
+                nextrep = "%ss" % nextrep
+
+            maxrepeat = script.repeats
+            remaining = script.remaining_repeats() or 0
+            if maxrepeat:
+                rept = "%i/%i" % (maxrepeat - remaining, maxrepeat)
+            else:
+                rept = "-/-"
+
+            table.add_row(
+                script.id,
+                f"{script.obj.key}({script.obj.dbref})"
+                if (hasattr(script, "obj") and script.obj)
+                else "<Global>",
+                script.key,
+                script.interval if script.interval > 0 else "--",
+                nextrep,
+                rept,
+                "*" if script.persistent else "-",
+                script.typeclass_path.rsplit(".", 1)[-1],
+                crop(script.desc, width=20),
+            )
+
+        return str(table)
 
 
 class CmdScripts(COMMAND_DEFAULT_CLASS):
@@ -547,7 +560,7 @@ class CmdScripts(COMMAND_DEFAULT_CLASS):
                 caller.msg(string)
             else:
                 # multiple matches.
-                EvMore(caller, scripts, page_formatter=format_script_list)
+                ScriptEvMore(caller, scripts, session=self.session)
                 caller.msg("Multiple script matches. Please refine your search")
         elif self.switches and self.switches[0] in ("validate", "valid", "val"):
             # run validation on all found scripts
@@ -557,7 +570,7 @@ class CmdScripts(COMMAND_DEFAULT_CLASS):
             caller.msg(string)
         else:
             # No stopping or validation. We just want to view things.
-            EvMore(caller, scripts, page_formatter=format_script_list)
+            ScriptEvMore(caller, scripts.order_by("id"), session=self.session)
 
 
 class CmdObjects(COMMAND_DEFAULT_CLASS):
@@ -827,21 +840,30 @@ class CmdService(COMMAND_DEFAULT_CLASS):
                 return
             if service.name[:7] == "Evennia":
                 if delmode:
-                    caller.msg("You cannot remove a core Evennia service (named 'Evennia***').")
+                    caller.msg("You cannot remove a core Evennia service (named 'Evennia*').")
                     return
-                string = "You seem to be shutting down a core Evennia service (named 'Evennia***'). Note that"
-                string += "stopping some TCP port services will *not* disconnect users *already*"
-                string += "connected on those ports, but *may* instead cause spurious errors for them. To "
-                string += "safely and permanently remove ports, change settings file and restart the server."
+                string = ("|RYou seem to be shutting down a core Evennia "
+                          "service (named 'Evennia*').\nNote that stopping "
+                          "some TCP port services will *not* disconnect users "
+                          "*already* connected on those ports, but *may* "
+                          "instead cause spurious errors for them.\nTo safely "
+                          "and permanently remove ports, change settings file "
+                          "and restart the server.|n\n")
                 caller.msg(string)
 
             if delmode:
                 service.stopService()
                 service_collection.removeService(service)
-                caller.msg("Stopped and removed service '%s'." % self.args)
+                caller.msg("|gStopped and removed service '%s'.|n" % self.args)
             else:
-                service.stopService()
-                caller.msg("Stopped service '%s'." % self.args)
+                caller.msg(f"Stopping service '{self.args}'...")
+                try:
+                    service.stopService()
+                except Exception as err:
+                    caller.msg(f"|rErrors were reported when stopping this service{err}.\n"
+                               "If there are remaining problems, try reloading "
+                               "or rebooting the server.")
+                caller.msg("|g... Stopped service '%s'.|n" % self.args)
             return
 
         if switches[0] == "start":
@@ -849,8 +871,14 @@ class CmdService(COMMAND_DEFAULT_CLASS):
             if service.running:
                 caller.msg("That service is already running.")
                 return
-            caller.msg("Starting service '%s'." % self.args)
-            service.startService()
+            caller.msg(f"Starting service '{self.args}' ...")
+            try:
+                service.startService()
+            except Exception as err:
+                caller.msg(f"|rErrors were reported when starting this service{err}.\n"
+                           "If there are remaining problems, try reloading the server, changing the "
+                           "settings if it's a non-standard service.|n")
+            caller.msg("|gService started.|n")
 
 
 class CmdAbout(COMMAND_DEFAULT_CLASS):

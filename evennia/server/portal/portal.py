@@ -31,7 +31,6 @@ from evennia.utils.utils import get_evennia_version, mod_import, make_iter
 from evennia.server.portal.portalsessionhandler import PORTAL_SESSIONS
 from evennia.utils import logger
 from evennia.server.webserver import EvenniaReverseProxyResource
-from django.db import connection
 
 
 # we don't need a connection to the database so close it right away
@@ -120,7 +119,7 @@ def _portal_maintenance():
 
     _MAINTENANCE_COUNT += 1
 
-    if _MAINTENANCE_COUNT % (3600 * 7) == 0:
+    if _MAINTENANCE_COUNT % (60 * 7) == 0:
         # drop database connection every 7 hrs to avoid default timeouts on MySQL
         # (see https://github.com/evennia/evennia/issues/1376)
         connection.close()
@@ -394,7 +393,7 @@ if WEBSERVER_ENABLED:
                     w_interface = WEBSOCKET_CLIENT_INTERFACE
                     w_ifacestr = ""
                     if w_interface not in ("0.0.0.0", "::") or len(WEBSERVER_INTERFACES) > 1:
-                        w_ifacestr = "-%s" % interface
+                        w_ifacestr = "-%s" % w_interface
                     port = WEBSOCKET_CLIENT_PORT
 
                     class Websocket(WebSocketServerFactory):
@@ -431,4 +430,6 @@ if WEBSERVER_ENABLED:
 
 for plugin_module in PORTAL_SERVICES_PLUGIN_MODULES:
     # external plugin services to start
-    plugin_module.start_plugin_services(PORTAL)
+    if plugin_module:
+        plugin_module.start_plugin_services(PORTAL)
+

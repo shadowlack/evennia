@@ -175,7 +175,7 @@ def _call_or_get(value, menu=None, choice=None, string=None, obj=None, caller=No
     Args:
         value (any): the value to obtain.  It might be a callable (see note).
 
-    Kwargs:
+    Keyword Args:
         menu (BuildingMenu, optional): the building menu to pass to value
                 if it is a callable.
         choice (Choice, optional): the choice to pass to value if a callable.
@@ -577,7 +577,7 @@ class BuildingMenu(object):
     keys_go_back = ["@"]  # The keys allowing to go back in the menu tree
     sep_keys = "."  # The key separator for menus with more than 2 levels
     joker_key = "*"  # The special key meaning "anything" in a choice key
-    min_shortcut = 1  # The minimum length of shorcuts when `key` is not set
+    min_shortcut = 1  # The minimum length of shortcuts when `key` is not set
 
     def __init__(
         self,
